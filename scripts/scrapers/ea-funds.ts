@@ -139,16 +139,48 @@ function extractGrantItems($: cheerio.CheerioAPI): string[] {
 
 function parseGrantItem(text: string): { recipient: string; amount: number; description: string } | null {
   const cleaned = text.replace(/\s+/g, ' ').trim();
-  const matches = cleaned.match(/\$[0-9][0-9,]*(?:\.\d+)?/g);
+  // Match dollar amounts, optionally followed by K/M/B/thousand/million/billion suffix
+  const amountRegex = /\$[0-9][0-9,]*(?:\.\d+)?\s*(?:k|m|b|thousand|million|billion)?/gi;
+  const matches = cleaned.match(amountRegex);
   if (!matches || matches.length === 0) return null;
   const amountStr = matches[matches.length - 1];
-  const amount = parseDollarAmount(amountStr);
+  const amount = parseDollarAmountWithSuffix(amountStr);
   if (amount <= 0) return null;
   const splitIndex = cleaned.lastIndexOf(amountStr);
   const before = cleaned.slice(0, splitIndex).replace(/[-–—:\s]+$/, '').trim();
   const after = cleaned.slice(splitIndex + amountStr.length).replace(/^[:\-\u2013\u2014]\s*/, '').trim();
   const recipient = before || 'Anonymous';
+
+  // Reject parsing artifacts: if recipient is too long it's a paragraph, not an org name
+  if (recipient.length > 300) return null;
+  // Reject suspiciously small amounts (under $100) — real grants are at least a few hundred dollars
+  if (amount < 100) return null;
+
   return { recipient, amount, description: after };
+}
+
+/** Parse a dollar amount string that may have a K/M/B or thousand/million/billion suffix */
+function parseDollarAmountWithSuffix(raw: string): number {
+  if (!raw) return 0;
+  const cleaned = raw.replace(/[$,]/g, '').trim();
+  const match = cleaned.match(/^([0-9]*\.?[0-9]+)\s*(k|m|b|thousand|million|billion)?$/i);
+  if (!match) return 0;
+  const num = parseFloat(match[1]);
+  if (isNaN(num)) return 0;
+  const suffix = (match[2] || '').toLowerCase();
+  switch (suffix) {
+    case 'k':
+    case 'thousand':
+      return num * 1_000;
+    case 'm':
+    case 'million':
+      return num * 1_000_000;
+    case 'b':
+    case 'billion':
+      return num * 1_000_000_000;
+    default:
+      return num;
+  }
 }
 
 async function fetchPayoutUrls(): Promise<string[]> {
